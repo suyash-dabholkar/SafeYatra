@@ -23,4 +23,4 @@ with app.app_context():
 
 if __name__ == '__main__':
     print("🚀 Starting SafeYatra Backend...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)

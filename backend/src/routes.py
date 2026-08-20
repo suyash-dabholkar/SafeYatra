@@ -152,3 +152,12 @@ def register_routes(app):
             "safest_path": path,
             "instruction": instruction
         }), 200
+        
+    @app.route("/cci", methods=["POST"])
+    def receive_cci():
+        data = request.get_json()
+        zone = data["zone_id"]
+        cci = data["cci"]
+        # store it so the routing/Dijkstra uses this zone's CCI
+        print(f"got CCI for {zone}: {cci} ({data['risk']})")
+        return {"ok": True}, 200
