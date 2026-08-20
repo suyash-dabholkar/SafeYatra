@@ -86,12 +86,13 @@ class CCIEngine:
         # same logic as CrowdPulse ml_risk.predict_risk (kept here for a robust model path)
         if people <= 2:
             return "SAFE"
-        feats = pd.DataFrame(
-            [[int(people), float(density), float(movement), float(cci)]],
-            columns=["people", "density", "movement", "cci"],
-        )
-        pred = int(self.model.predict(feats)[0])
-        return {0: "SAFE", 1: "WARNING", 2: "HIGH RISK"}.get(pred, "SAFE")
+
+        if cci < 55:
+            return "SAFE"
+        elif cci <= 75:
+            return "WARNING"
+        else:
+            return "HIGH RISK"
     
     def annotate_frame(self, frame, result):
         risk = result["risk"]
