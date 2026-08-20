@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from src.models import db, Tourist, Incident
 from datetime import datetime
-
+from src.logic import find_safest_exit_with_cci
 # --- IN-MEMORY STATE (The Hackathon Way) ---
 # We keep rapid movement data in memory so we don't crash the database!
 current_position = {}  # band_id -> {"zone_id": "zone_1", "last_seen": timestamp}
@@ -117,4 +117,38 @@ def register_routes(app):
             "zone_occupancy": occupancy_serializable,
             "zone_status": zone_status,
             "active_incidents": incidents_list
+        }), 200
+
+
+# Add this inside your register_routes(app) function:
+
+    @app.route('/route/<band_id>', methods=['GET'])
+    def get_live_route_for_band(band_id):
+        """
+        Calculates the real-time safest path for a specific tourist band 
+        based on current live zone positions and CCI risk scores.
+        """
+        # 1. Find where the tourist currently is from our in-memory state dictionary
+        tourist_state = current_position.get(band_id)
+        if not tourist_state:
+            return jsonify({"error": "Band not found or currently inactive in telemetry state"}), 404
+            
+        current_zone = tourist_state.get('zone_id')
+
+        # 2. Mock or fetch live CCI risk scores for all zones 
+        # (In a full production loop, this dictionary would be updated dynamically by your AI/CCI engine)
+        live_cci_scores = {
+            "zone_1": 0.1,
+            "zone_2": 0.9 if zone_status.get("zone_2", {}).get("status") == "danger" else 0.2,
+            "cp_1": 0.0
+        }
+
+        # 3. Run your dynamic CCI Dijkstra pathfinding engine
+        path, instruction = find_safest_exit_with_cci(current_zone, live_cci_scores)
+
+        return jsonify({
+            "band_id": band_id,
+            "current_zone": current_zone,
+            "safest_path": path,
+            "instruction": instruction
         }), 200
