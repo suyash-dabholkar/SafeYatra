@@ -1,0 +1,36 @@
+# ---- Secrets (NEVER commit) ----
+.env
+**/.env
+secrets.h
+**/secrets.h
+
+# ---- Python / backend ----
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ---- Node / dashboard / trekker-app ----
+node_modules/
+dist/
+build/
+.cache/
+
+# ---- Firmware build output ----
+.pio/
+*.hex
+*.bin
+*.elf
+build/
+
+# ---- ML weights (keep out of git — share separately or use Git LFS) ----
+*.pt
+*.onnx
+*.weights
+
+# ---- OS / editor junk ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
