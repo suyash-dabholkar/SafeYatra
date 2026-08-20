@@ -1,9 +1,4 @@
-Flask
-flask-cors
-networkx
-paho-mqtt
-# AI (reused from CrowdPulse): add when wiring ai/
-# ultralytics
-# opencv-python
-# scikit-learn
-# joblib
+Flask==3.0.2
+requests==2.31.0
+python-dotenv==1.0.1
+networkx==3.2.1
