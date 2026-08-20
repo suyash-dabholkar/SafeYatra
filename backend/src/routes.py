@@ -1,51 +1,49 @@
 from flask import request, jsonify
-from src.models import db, Tourist
+from src.models import db, Tourist, Incident
+from datetime import datetime
+
+# --- IN-MEMORY STATE (The Hackathon Way) ---
+# We keep rapid movement data in memory so we don't crash the database!
+current_position = {}  # band_id -> {"zone_id": "zone_1", "last_seen": timestamp}
+zone_occupancy = {}    # zone_id -> set of band_ids
+zone_status = {        # Mocked initial graph state
+    "zone_1": {"status": "safe", "risk_score": 0.1},
+    "zone_2": {"status": "safe", "risk_score": 0.2},
+    "cp_1": {"status": "safe", "risk_score": 0.0}
+}
 
 def register_routes(app):
+    
+    # ==========================================
+    # 1. REGISTRATION ROUTES
+    # ==========================================
     @app.route('/registration/bind', methods=['POST'])
     def bind_tourist():
-        """
-        Receives the hardcoded NFC UID from the Arduino/ESP32 kiosk
-        and links it to a tourist in the database.
-        """
         data = request.json
-        
-        # 1. Extract the data sent by the C++ code
         nfc_uid = data.get('nfc_id')
-        digilocker_id = data.get('digilocker_id') # From your kiosk UI or stubbed
+        digilocker_id = data.get('digilocker_id')
         band_type = data.get('band_type')
         
         if not nfc_uid or not band_type:
             return jsonify({"error": "Missing nfc_id or band_type"}), 400
 
-        # 2. Check if this physical band is already bound and active
         existing_tourist = Tourist.query.filter_by(id=nfc_uid, status='active').first()
         if existing_tourist:
             return jsonify({"error": "Band is already active. Please reset it first."}), 409
             
-        # 3. Create the database record. 
-        # Because we pass the `id` explicitly, SQLAlchemy uses our NFC UID
-        # instead of generating a random one!
         new_tourist = Tourist(
             id=nfc_uid, 
-            band_id=digilocker_id, # Reusing the band_id column to store the identity link
+            band_id=digilocker_id,
             band_type=band_type,
             status='active'
         )
-        
         db.session.add(new_tourist)
         db.session.commit()
-        
         print(f"[REGISTRATION] Linked NFC {nfc_uid} to {digilocker_id}")
-        
-        # 4. Respond to the C++ board
         return jsonify({"status": "bound", "tourist_id": new_tourist.id}), 201
 
     @app.route('/registration/release', methods=['POST'])
     def release_tourist():
-        """
-        Unlinks the tag so it can be handed to a new visitor.
-        """
         data = request.json
         nfc_uid = data.get('nfc_id')
         
@@ -55,5 +53,68 @@ def register_routes(app):
             
         tourist.status = 'exited'
         db.session.commit()
-        
         return jsonify({"status": "released", "message": "Band ready for reuse"}), 200
+
+    # ==========================================
+    # 2. TELEMETRY ROUTE (The missing piece!)
+    # ==========================================
+    @app.route('/telemetry', methods=['POST'])
+    def handle_telemetry():
+        data = request.json
+        band_id = data.get('band_id')
+        event_type = data.get('type', 'presence')
+        timestamp = datetime.now().isoformat()
+
+        if not band_id:
+            return jsonify({"error": "Missing band_id"}), 400
+
+        # Handle Critical Alerts (SOS / Fall) -> Write straight to DB!
+        if event_type in ['SOS', 'fall']:
+            new_incident = Incident(
+                band_id=band_id,
+                type=event_type,
+                location=data.get('zone_id') or data.get('lat_long', 'unknown')
+            )
+            db.session.add(new_incident)
+            db.session.commit()
+            print(f"[🚨 ALERT] {event_type.upper()} triggered by {band_id}! Saved to DB.")
+            return jsonify({"status": "alert_logged", "incident_id": new_incident.id}), 201
+
+        # Handle Routine Movement -> Keep in memory!
+        new_zone = data.get('zone_id')
+        if new_zone:
+            old_zone = current_position.get(band_id, {}).get('zone_id')
+            
+            # Update position
+            current_position[band_id] = {"zone_id": new_zone, "last_seen": timestamp}
+            
+            # Update occupancy if they moved
+            if old_zone != new_zone:
+                if old_zone and old_zone in zone_occupancy and band_id in zone_occupancy[old_zone]:
+                    zone_occupancy[old_zone].remove(band_id)
+                
+                if new_zone not in zone_occupancy:
+                    zone_occupancy[new_zone] = set()
+                zone_occupancy[new_zone].add(band_id)
+                print(f"[🚶‍♂️ MOVE] {band_id} moved to {new_zone}")
+
+        return jsonify({"status": "success"}), 200
+
+    # ==========================================
+    # 3. DASHBOARD ROUTE (For Person 4)
+    # ==========================================
+    @app.route('/dashboard/live', methods=['GET'])
+    def get_dashboard_data():
+        # Convert memory sets to lists so JSON can read them
+        occupancy_serializable = {zone: list(bands) for zone, bands in zone_occupancy.items()}
+        
+        # Fetch active incidents straight from our new database!
+        active_incidents = Incident.query.filter_by(status='open').all()
+        incidents_list = [incident.to_dict() for incident in active_incidents]
+        
+        return jsonify({
+            "current_position": current_position,
+            "zone_occupancy": occupancy_serializable,
+            "zone_status": zone_status,
+            "active_incidents": incidents_list
+        }), 200

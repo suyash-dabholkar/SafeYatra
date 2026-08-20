@@ -1,12 +1,14 @@
 import requests
 import time
 import random
+from datetime import datetime
 
-
+# Point this to your machine's local IP or localhost
 API_URL = "http://127.0.0.1:5000/telemetry"
 
 ZONES = ["zone_1", "zone_2", "cp_1"]
-BANDS = ["band_A", "band_B", "band_C"]
+# Notice your successfully registered NFC UID is in this list!
+BANDS = ["04BA5F22", "band_B", "band_C"]
 
 def send_telemetry(band_id, zone_id, event_type="presence"):
     payload = {
@@ -15,16 +17,17 @@ def send_telemetry(band_id, zone_id, event_type="presence"):
         "zone_id": zone_id
     }
     
+    # Fake GPS coordinates for a remote band fall
     if event_type == "fall":
-        payload["lat_long"] = "32.83, 74.87" # Fake GPS for remote band demo
+        payload["lat_long"] = "32.83, 74.87" 
 
     try:
         response = requests.post(API_URL, json=payload)
-        print(f"Sent {event_type} for {band_id} -> HTTP {response.status_code}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Sent {event_type.upper()} for {band_id} to {zone_id} -> HTTP {response.status_code}")
     except Exception as e:
         print(f"Failed to connect to backend: {e}")
 
-print("Starting Fake Hardware Sender...")
+print("🚀 Starting Fake Hardware Sender...")
 print("Press Ctrl+C to stop.")
 
 try:
@@ -43,6 +46,6 @@ try:
             print("\n🚨 SIMULATING FALL DETECTION 🚨")
             send_telemetry(random.choice(BANDS), zone, "fall")
             
-        time.sleep(3) # Wait 3 seconds before next tick
+        time.sleep(3) # Wait 3 seconds before the next movement
 except KeyboardInterrupt:
     print("\nShutting down fake sender.")
