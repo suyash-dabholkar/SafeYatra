@@ -1,26 +1,54 @@
 from flask import request, jsonify
 from datetime import datetime
-from models import db, Tourist, Incident
-from logic import find_safest_exit_with_cci, classify_zone_status
+from src.models import db, Tourist, Incident
+from src.logic import find_safest_exit_with_cci, classify_zone_status
 
 
 current_position = {}  # band_id -> {"zone_id": "zone_1", "last_seen": timestamp}
-zone_occupancy = {}    # zone_id -> set of band_ids
-
-zone_cci_scores = {     # zone_id -> latest raw risk_score (0.0-1.0) from AI process
+zone_occupancy = {} 
+# zone_id -> set of band_ids
+gateway_commands = {
+    "SafeYatra_Gateway_1": "STOP_ALERT",
+    "SafeYatra_Gateway_2": "STOP_ALERT",
+    "SafeYatra_Gateway_3": "STOP_ALERT"
+}
+zone_cci_scores = {
     "zone_1": 0.0,
     "zone_2": 0.0,
-    "cp_1": 0.0,
+    "zone_3": 0.0,
 }
 
-zone_status = {          # zone_id -> classified status, derived from zone_cci_scores
+zone_status = {
     "zone_1": {"status": "safe", "risk_score": 0.0},
     "zone_2": {"status": "safe", "risk_score": 0.0},
-    "cp_1": {"status": "safe", "risk_score": 0.0}
+    "zone_3": {"status": "safe", "risk_score": 0.0}
 }
 
 
 def register_routes(app):
+    # ==========================================
+# GATEWAY COMMAND ROUTE
+# ==========================================
+
+    @app.route('/gateway/command/<gateway_id>', methods=['GET'])
+    def get_gateway_command(gateway_id):
+
+        command = gateway_commands.get(
+            gateway_id,
+            "STOP_ALERT"
+        )
+
+        print(
+            f"[GATEWAY] {gateway_id} -> {command}"
+        )
+
+        # Clear command after delivering it
+        gateway_commands[gateway_id] = "STOP_ALERT"
+
+        return jsonify({
+            "gateway_id": gateway_id,
+            "command": command
+        }), 200
 
     # ==========================================
     # 1. REGISTRATION ROUTES
@@ -136,44 +164,158 @@ def register_routes(app):
     # ==========================================
     @app.route("/cci", methods=["POST"])
     def receive_cci():
-        data = request.get_json()
+
+        print("\n========== CCI REQUEST RECEIVED ==========")
+
+        data = request.get_json(silent=True)
+
+        print("Raw data:", data)
+
+        if data is None:
+            print("ERROR: No JSON received.")
+            return jsonify({"error": "Invalid or missing JSON"}), 400
+
         zone = data.get("zone_id")
-        risk = data.get("cci")  # expected float 0.0-1.0
+        cci = data.get("cci")
+        risk = data.get("risk")
 
-        if zone is None or risk is None:
-            return jsonify({"error": "Missing zone_id or cci"}), 400
+        print("Zone:", zone)
+        print("CCI:", cci)
+        print("Risk:", risk)
 
-        # 1. Update raw score (what pathfinding reads)
-        zone_cci_scores[zone] = risk
+        if zone is None or cci is None:
+            print("ERROR: Missing zone_id or cci")
+            return jsonify({
+                "error": "Missing zone_id or cci"
+            }), 400
 
-        # 2. Update classified status (what dashboard + breach logic read)
-        new_status = classify_zone_status(risk)
-        old_status = zone_status.get(zone, {}).get("status")
-        zone_status[zone] = {"status": new_status, "risk_score": risk}
+        try:
+            cci = float(cci)
+        except (TypeError, ValueError):
 
-        print(f"[CCI] {zone}: {risk:.2f} -> {new_status}")
+            print("ERROR: CCI is not a number.")
 
-        # 3. If a zone just crossed INTO danger, notify everyone currently
-        #    standing in it with an updated safe route.
-        if old_status != "danger" and new_status == "danger":
-            print(f"[ZONE DANGER] {zone} just crossed into danger — recalculating routes")
-            affected_bands = list(zone_occupancy.get(zone, []))
+            return jsonify({
+                "error": "CCI must be a number"
+            }), 400
+
+        # -------------------------------------------------
+        # Store latest CCI
+        # -------------------------------------------------
+
+        zone_cci_scores[zone] = cci 
+        # ==========================================
+# SEND RISK COMMAND TO GATEWAY
+# ==========================================
+
+        if zone == "zone_1":
+
+            if cci > 75:
+
+                gateway_commands[
+                    "SafeYatra_Gateway_1"
+                ] = "HIGH_RISK"
+
+                print(
+                    "[GATEWAY 1] HIGH_RISK command queued"
+                )
+
+            elif cci >= 55:
+
+                gateway_commands[
+                    "SafeYatra_Gateway_1"
+                ] = "WARNING"
+
+                print(
+                    "[GATEWAY 1] WARNING command queued"
+                )
+
+            else:
+
+                gateway_commands[
+                    "SafeYatra_Gateway_1"
+                ] = "STOP_ALERT"
+
+                print(
+                    "[GATEWAY 1] STOP_ALERT command queued"
+                )
+
+        # -------------------------------------------------
+        # Classify using backend logic
+        # -------------------------------------------------
+
+        new_status = classify_zone_status(cci)
+
+        old_status = zone_status.get(
+            zone,
+            {}
+        ).get(
+            "status",
+            "safe"
+        )
+
+        zone_status[zone] = {
+            "status": new_status,
+            "risk_score": cci
+        }
+
+        print(
+            f"[CCI] {zone}: "
+            f"CCI={cci:.2f} "
+            f"AI_RISK={risk} "
+            f"BACKEND_STATUS={new_status}"
+        )
+
+        # -------------------------------------------------
+        # Danger transition
+        # -------------------------------------------------
+
+        if (
+            old_status != "danger"
+            and new_status == "danger"
+        ):
+
+            print(
+                f"[ZONE DANGER] "
+                f"{zone} crossed into danger."
+            )
+
+            affected_bands = list(
+                zone_occupancy.get(zone, [])
+            )
+
             for band_id in affected_bands:
-                path, instruction = find_safest_exit_with_cci(zone, zone_cci_scores)
-                # This is where you'd push {path, instruction} out over
-                # MQTT/HTTP to that band's gateway so it can vibrate + light
-                # the correct direction. For now, just log it.
-                print(f"  -> reroute {band_id}: {instruction}")
+
+                path, instruction = \
+                    find_safest_exit_with_cci(
+                        zone,
+                        zone_cci_scores
+                    )
+
+                print(
+                    f"[REROUTE] "
+                    f"{band_id} -> "
+                    f"{instruction}"
+                )
 
             crowd_incident = Incident(
                 band_id=None,
-                type='crowd-risk',
+                type="crowd-risk",
                 location=zone
             )
+
             db.session.add(crowd_incident)
             db.session.commit()
 
-        return jsonify({"status": "recorded", "zone": zone, "classified": new_status}), 200
+        print("==========================================\n")
+
+        return jsonify({
+            "status": "recorded",
+            "zone": zone,
+            "cci": cci,
+            "ai_risk": risk,
+            "classified": new_status
+        }), 200
 
     # ==========================================
     # 4. DASHBOARD ROUTE (For Person 4)
