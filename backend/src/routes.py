@@ -1,19 +1,27 @@
 from flask import request, jsonify
-from src.models import db, Tourist, Incident
 from datetime import datetime
-from src.logic import find_safest_exit_with_cci
-# --- IN-MEMORY STATE (The Hackathon Way) ---
-# We keep rapid movement data in memory so we don't crash the database!
+from models import db, Tourist, Incident
+from logic import find_safest_exit_with_cci, classify_zone_status
+
+
 current_position = {}  # band_id -> {"zone_id": "zone_1", "last_seen": timestamp}
 zone_occupancy = {}    # zone_id -> set of band_ids
-zone_status = {        # Mocked initial graph state
-    "zone_1": {"status": "safe", "risk_score": 0.1},
-    "zone_2": {"status": "safe", "risk_score": 0.2},
+
+zone_cci_scores = {     # zone_id -> latest raw risk_score (0.0-1.0) from AI process
+    "zone_1": 0.0,
+    "zone_2": 0.0,
+    "cp_1": 0.0,
+}
+
+zone_status = {          # zone_id -> classified status, derived from zone_cci_scores
+    "zone_1": {"status": "safe", "risk_score": 0.0},
+    "zone_2": {"status": "safe", "risk_score": 0.0},
     "cp_1": {"status": "safe", "risk_score": 0.0}
 }
 
+
 def register_routes(app):
-    
+
     # ==========================================
     # 1. REGISTRATION ROUTES
     # ==========================================
@@ -23,16 +31,19 @@ def register_routes(app):
         nfc_uid = data.get('nfc_id')
         digilocker_id = data.get('digilocker_id')
         band_type = data.get('band_type')
-        
+
         if not nfc_uid or not band_type:
             return jsonify({"error": "Missing nfc_id or band_type"}), 400
 
         existing_tourist = Tourist.query.filter_by(id=nfc_uid, status='active').first()
         if existing_tourist:
             return jsonify({"error": "Band is already active. Please reset it first."}), 409
-            
+
+        # NOTE: Tourist.id (the NFC UID) is the identifier used EVERYWHERE ELSE
+        # in the system (telemetry, current_position, zone_occupancy, incidents).
+        # digilocker_id is stored separately and is NEVER used as the tracking key.
         new_tourist = Tourist(
-            id=nfc_uid, 
+            id=nfc_uid,
             band_id=digilocker_id,
             band_type=band_type,
             status='active'
@@ -46,17 +57,24 @@ def register_routes(app):
     def release_tourist():
         data = request.json
         nfc_uid = data.get('nfc_id')
-        
+
         tourist = Tourist.query.filter_by(id=nfc_uid, status='active').first()
         if not tourist:
             return jsonify({"error": "Band not found or already exited"}), 404
-            
+
         tourist.status = 'exited'
         db.session.commit()
+
+        # Clean up in-memory state so an exited band doesn't linger on the live map
+        old_zone = current_position.get(nfc_uid, {}).get('zone_id')
+        if old_zone and old_zone in zone_occupancy:
+            zone_occupancy[old_zone].discard(nfc_uid)
+        current_position.pop(nfc_uid, None)
+
         return jsonify({"status": "released", "message": "Band ready for reuse"}), 200
 
     # ==========================================
-    # 2. TELEMETRY ROUTE (The missing piece!)
+    # 2. TELEMETRY ROUTE
     # ==========================================
     @app.route('/telemetry', methods=['POST'])
     def handle_telemetry():
@@ -77,41 +95,96 @@ def register_routes(app):
             )
             db.session.add(new_incident)
             db.session.commit()
-            print(f"[🚨 ALERT] {event_type.upper()} triggered by {band_id}! Saved to DB.")
+            print(f"[ALERT] {event_type.upper()} triggered by {band_id}! Saved to DB.")
             return jsonify({"status": "alert_logged", "incident_id": new_incident.id}), 201
 
         # Handle Routine Movement -> Keep in memory!
         new_zone = data.get('zone_id')
         if new_zone:
             old_zone = current_position.get(band_id, {}).get('zone_id')
-            
+
             # Update position
             current_position[band_id] = {"zone_id": new_zone, "last_seen": timestamp}
-            
+
             # Update occupancy if they moved
             if old_zone != new_zone:
                 if old_zone and old_zone in zone_occupancy and band_id in zone_occupancy[old_zone]:
                     zone_occupancy[old_zone].remove(band_id)
-                
+
                 if new_zone not in zone_occupancy:
                     zone_occupancy[new_zone] = set()
                 zone_occupancy[new_zone].add(band_id)
-                print(f"[🚶‍♂️ MOVE] {band_id} moved to {new_zone}")
+                print(f"[MOVE] {band_id} moved to {new_zone}")
+
+                # --- ZONE-BREACH CHECK ---
+                # Minimal version: if the zone they just entered is currently
+                # classified 'danger', log it as an incident immediately.
+                if zone_status.get(new_zone, {}).get("status") == "danger":
+                    breach_incident = Incident(
+                        band_id=band_id,
+                        type='zone-breach',
+                        location=new_zone
+                    )
+                    db.session.add(breach_incident)
+                    db.session.commit()
+                    print(f"[BREACH] {band_id} entered DANGER zone {new_zone}!")
 
         return jsonify({"status": "success"}), 200
 
     # ==========================================
-    # 3. DASHBOARD ROUTE (For Person 4)
+    # 3. CCI INGEST ROUTE
+    # ==========================================
+    @app.route("/cci", methods=["POST"])
+    def receive_cci():
+        data = request.get_json()
+        zone = data.get("zone_id")
+        risk = data.get("cci")  # expected float 0.0-1.0
+
+        if zone is None or risk is None:
+            return jsonify({"error": "Missing zone_id or cci"}), 400
+
+        # 1. Update raw score (what pathfinding reads)
+        zone_cci_scores[zone] = risk
+
+        # 2. Update classified status (what dashboard + breach logic read)
+        new_status = classify_zone_status(risk)
+        old_status = zone_status.get(zone, {}).get("status")
+        zone_status[zone] = {"status": new_status, "risk_score": risk}
+
+        print(f"[CCI] {zone}: {risk:.2f} -> {new_status}")
+
+        # 3. If a zone just crossed INTO danger, notify everyone currently
+        #    standing in it with an updated safe route.
+        if old_status != "danger" and new_status == "danger":
+            print(f"[ZONE DANGER] {zone} just crossed into danger — recalculating routes")
+            affected_bands = list(zone_occupancy.get(zone, []))
+            for band_id in affected_bands:
+                path, instruction = find_safest_exit_with_cci(zone, zone_cci_scores)
+                # This is where you'd push {path, instruction} out over
+                # MQTT/HTTP to that band's gateway so it can vibrate + light
+                # the correct direction. For now, just log it.
+                print(f"  -> reroute {band_id}: {instruction}")
+
+            crowd_incident = Incident(
+                band_id=None,
+                type='crowd-risk',
+                location=zone
+            )
+            db.session.add(crowd_incident)
+            db.session.commit()
+
+        return jsonify({"status": "recorded", "zone": zone, "classified": new_status}), 200
+
+    # ==========================================
+    # 4. DASHBOARD ROUTE (For Person 4)
     # ==========================================
     @app.route('/dashboard/live', methods=['GET'])
     def get_dashboard_data():
-        # Convert memory sets to lists so JSON can read them
         occupancy_serializable = {zone: list(bands) for zone, bands in zone_occupancy.items()}
-        
-        # Fetch active incidents straight from our new database!
+
         active_incidents = Incident.query.filter_by(status='open').all()
         incidents_list = [incident.to_dict() for incident in active_incidents]
-        
+
         return jsonify({
             "current_position": current_position,
             "zone_occupancy": occupancy_serializable,
@@ -119,32 +192,23 @@ def register_routes(app):
             "active_incidents": incidents_list
         }), 200
 
-
-# Add this inside your register_routes(app) function:
-
+    # ==========================================
+    # 5. LIVE ROUTE FOR A SPECIFIC BAND
+    # ==========================================
     @app.route('/route/<band_id>', methods=['GET'])
     def get_live_route_for_band(band_id):
         """
-        Calculates the real-time safest path for a specific tourist band 
+        Calculates the real-time safest path for a specific tourist band
         based on current live zone positions and CCI risk scores.
         """
-        # 1. Find where the tourist currently is from our in-memory state dictionary
         tourist_state = current_position.get(band_id)
         if not tourist_state:
             return jsonify({"error": "Band not found or currently inactive in telemetry state"}), 404
-            
+
         current_zone = tourist_state.get('zone_id')
 
-        # 2. Mock or fetch live CCI risk scores for all zones 
-        # (In a full production loop, this dictionary would be updated dynamically by your AI/CCI engine)
-        live_cci_scores = {
-            "zone_1": 0.1,
-            "zone_2": 0.9 if zone_status.get("zone_2", {}).get("status") == "danger" else 0.2,
-            "cp_1": 0.0
-        }
-
-        # 3. Run your dynamic CCI Dijkstra pathfinding engine
-        path, instruction = find_safest_exit_with_cci(current_zone, live_cci_scores)
+        # Uses REAL live scores now, updated by /cci — no more hardcoded values
+        path, instruction = find_safest_exit_with_cci(current_zone, zone_cci_scores)
 
         return jsonify({
             "band_id": band_id,
@@ -152,12 +216,3 @@ def register_routes(app):
             "safest_path": path,
             "instruction": instruction
         }), 200
-        
-    @app.route("/cci", methods=["POST"])
-    def receive_cci():
-        data = request.get_json()
-        zone = data["zone_id"]
-        cci = data["cci"]
-        # store it so the routing/Dijkstra uses this zone's CCI
-        print(f"got CCI for {zone}: {cci} ({data['risk']})")
-        return {"ok": True}, 200

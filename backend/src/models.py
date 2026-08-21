@@ -10,14 +10,15 @@ def generate_uuid():
     return str(uuid.uuid4())
 
 class Tourist(db.Model):
-    """Tracks physical bands tied to visitors."""
-    __tablename__ = 'tourists'
+    # FIX 2: Use explicit names. 
+    # nfc_uid is the primary key and used by telemetry/routing.
+    nfc_uid = db.Column(db.String(50), primary_key=True) 
     
-    id = db.Column(db.String, primary_key=True, default=generate_uuid)
-    band_id = db.Column(db.String, unique=True, nullable=False)
-    band_type = db.Column(db.String, nullable=False)  # 'crowd' or 'remote'
-    status = db.Column(db.String, default='active')   # 'active' or 'exited'
-    registered_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # digilocker_ref is ONLY used at the registration desk for identity.
+    digilocker_ref = db.Column(db.String(100), unique=True, nullable=False)
+    
+    name = db.Column(db.String(100))
+    emergency_contact = db.Column(db.String(20))
 
 class Zone(db.Model):
     """Represents physical locations (crowd zones or trail checkpoints)."""
@@ -27,18 +28,17 @@ class Zone(db.Model):
     current_status = db.Column(db.String, default='safe') # 'safe', 'warning', 'danger'
 
 class Incident(db.Model):
-    """The unified log for SOS, falls, and zone breaches."""
     __tablename__ = 'incidents'
     
     id = db.Column(db.String, primary_key=True, default=generate_uuid)
-    band_id = db.Column(db.String, nullable=True)     # Nullable for venue-wide crowd-risk
-    type = db.Column(db.String, nullable=False)       # 'SOS', 'fall', 'zone-breach'
-    location = db.Column(db.String, nullable=False)   # zone_id or lat/long string
+    band_id = db.Column(db.String, nullable=True)     
+    type = db.Column(db.String, nullable=False)       
+    location = db.Column(db.String, nullable=False)   
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    status = db.Column(db.String, default='open')     # 'open', 'acknowledged', 'resolved'
+    status = db.Column(db.String, default='open')     
 
+    # ADD THIS METHOD:
     def to_dict(self):
-        """Helper to easily serialize to JSON for the frontend dashboard"""
         return {
             "id": self.id,
             "band_id": self.band_id,
