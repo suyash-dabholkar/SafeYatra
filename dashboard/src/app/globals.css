@@ -1,0 +1,139 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ */
+/*  SafeYatra — Claymorphism design system                             */
+/*  Solid colors only (no gradients). Depth comes from layered soft    */
+/*  shadows + inner highlights, the hallmark of claymorphism.          */
+/* ------------------------------------------------------------------ */
+
+@theme inline {
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
+
+  /* Solid palette */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-teal: var(--teal);
+  --color-teal-fg: var(--teal-fg);
+  --color-teal-soft: var(--teal-soft);
+
+  --color-moss: var(--moss);
+  --color-moss-fg: var(--moss-fg);
+  --color-moss-soft: var(--moss-soft);
+
+  --color-amber: var(--amber);
+  --color-amber-fg: var(--amber-fg);
+  --color-amber-soft: var(--amber-soft);
+
+  --color-coral: var(--coral);
+  --color-coral-fg: var(--coral-fg);
+  --color-coral-soft: var(--coral-soft);
+
+  --color-sky: var(--sky);
+  --color-sky-fg: var(--sky-fg);
+  --color-sky-soft: var(--sky-soft);
+
+  --color-border: var(--border);
+
+  /* Clay radii — generous, pillowy */
+  --radius-clay: 1.75rem;
+  --radius-clay-sm: 1.15rem;
+  --radius-clay-lg: 2.25rem;
+
+  /* Clay shadows — dual light/dark + inner highlight */
+  --shadow-clay: 0.5rem 0.5rem 1.1rem rgba(51, 48, 43, 0.16),
+    -0.4rem -0.4rem 0.9rem rgba(255, 255, 255, 0.9),
+    inset 0.1rem 0.1rem 0.2rem rgba(255, 255, 255, 0.55);
+  --shadow-clay-sm: 0.3rem 0.3rem 0.7rem rgba(51, 48, 43, 0.14),
+    -0.25rem -0.25rem 0.6rem rgba(255, 255, 255, 0.85),
+    inset 0.06rem 0.06rem 0.15rem rgba(255, 255, 255, 0.5);
+  --shadow-clay-inset: inset 0.28rem 0.28rem 0.55rem rgba(51, 48, 43, 0.2),
+    inset -0.22rem -0.22rem 0.5rem rgba(255, 255, 255, 0.8);
+  --shadow-clay-pressed: inset 0.35rem 0.35rem 0.6rem rgba(51, 48, 43, 0.22),
+    inset -0.2rem -0.2rem 0.45rem rgba(255, 255, 255, 0.6);
+}
+
+:root {
+  color-scheme: light;
+
+  --background: #e7e0d3;
+  --foreground: #33302b;
+  --surface: #f4efe6;
+  --surface-sunken: #ded6c7;
+
+  --ink: #33302b;
+  --ink-soft: #6b665c;
+  --ink-faint: #9c968a;
+
+  --teal: #2b7c72;
+  --teal-fg: #f4efe6;
+  --teal-soft: #cfe5e0;
+
+  --moss: #4f8a52;
+  --moss-fg: #f4efe6;
+  --moss-soft: #d6e7cf;
+
+  --amber: #d99436;
+  --amber-fg: #4a3413;
+  --amber-soft: #f2e0bf;
+
+  --coral: #d5563f;
+  --coral-fg: #f4efe6;
+  --coral-soft: #f4cdc3;
+
+  --sky: #3f77b0;
+  --sky-fg: #f4efe6;
+  --sky-soft: #cfdff0;
+
+  --border: rgba(255, 255, 255, 0.55);
+  --radius: 1.75rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--teal);
+    outline-offset: 2px;
+    border-radius: 0.75rem;
+  }
+}
+
+@layer utilities {
+  .shadow-clay {
+    box-shadow: var(--shadow-clay);
+  }
+  .shadow-clay-sm {
+    box-shadow: var(--shadow-clay-sm);
+  }
+  .shadow-clay-inset {
+    box-shadow: var(--shadow-clay-inset);
+  }
+  .shadow-clay-pressed {
+    box-shadow: var(--shadow-clay-pressed);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
